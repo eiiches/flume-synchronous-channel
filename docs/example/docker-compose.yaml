@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  flume:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    ports:
+    - '44444:44444'
+    volumes:
+    - type: bind
+      source: ./flume-conf.properties
+      target: /opt/apache-flume-1.10.1-bin/conf/flume-conf.properties
+    - type: bind
+      source: ./log4j2.xml
+      target: /opt/apache-flume-1.10.1-bin/conf/log4j2.xml
+    - type: bind
+      source: ../../target/flume-synchronous-channel-1.0.0-SNAPSHOT.jar
+      target: /opt/apache-flume-1.10.1-bin/lib/flume-synchronous-channel-1.0.0-SNAPSHOT.jar
+    environment:
+    - JAVA_OPTS=-Xmx512m -Xms512m
