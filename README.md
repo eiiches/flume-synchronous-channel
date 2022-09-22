@@ -49,9 +49,7 @@ If you don't need at-least once delivery, just use Memory Channel. If the source
 Performance
 -----------
 
-TODO: do some benchmark
-
-Because sources and sinks are synchronized, I expect the throughput to be slightly worse than using a normal File Channel, unless the number of parallel sinks/sources is increased.
+YMMV, but in our benchmark, we observed 80-90% increase in throughput and 75-95% reduction in CPU usage compared to File Channel. See [docs/benchmark/README.md](docs/benchmark/README.md) for the details.
 
 License
 -------

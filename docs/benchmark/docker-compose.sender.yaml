@@ -1,0 +1,67 @@
+version: '3.8'
+services:
+  sender-synchronous-channel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    security_opt: # for async-profiler
+    - seccomp:unconfined
+    cap_add: # for async-profiler
+    - SYS_ADMIN
+    volumes:
+    - type: bind
+      source: ./flume-conf-sender-synchronous-channel.properties
+      target: /opt/apache-flume-1.10.1-bin/conf/flume-conf.properties
+    - type: bind
+      source: ./log4j2.xml
+      target: /opt/apache-flume-1.10.1-bin/conf/log4j2.xml
+    - type: bind
+      source: ../../target/flume-synchronous-channel-1.0.0-SNAPSHOT.jar
+      target: /opt/apache-flume-1.10.1-bin/lib/flume-synchronous-channel-1.0.0-SNAPSHOT.jar
+    - type: bind
+      source: /mnt # nvme1n1p1
+      target: /data
+    environment:
+    - JAVA_OPTS=-Xmx512m -Xms512m
+  sender-file-channel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    security_opt: # for async-profiler
+    - seccomp:unconfined
+    cap_add: # for async-profiler
+    - SYS_ADMIN
+    volumes:
+    - type: bind
+      source: ./flume-conf-sender-file-channel.properties
+      target: /opt/apache-flume-1.10.1-bin/conf/flume-conf.properties
+    - type: bind
+      source: ./log4j2.xml
+      target: /opt/apache-flume-1.10.1-bin/conf/log4j2.xml
+    - type: bind
+      source: /mnt # nvme1n1p1
+      target: /data
+    environment:
+    - JAVA_OPTS=-Xmx512m -Xms512m
+  prometheus:
+    image: prom/prometheus:v2.19.2
+    volumes:
+    - type: bind
+      source: ./prometheus.yaml
+      target: /etc/prometheus/prometheus.yml
+    ports:
+    - '9090:9090'
+    tmpfs:
+    - /prometheus:uid=65534,gid=65534
+    user: '65534:65534'
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.path=/prometheus
+    - --web.console.libraries=/usr/share/prometheus/console_libraries
+    - --web.console.templates=/usr/share/prometheus/consoles
+    - --storage.tsdb.retention.size=64MB
+    - --storage.tsdb.wal-compression
+    - --storage.tsdb.min-block-duration=10m
+    - --storage.tsdb.max-block-duration=10m

@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<style>
+	body {margin: 0; padding: 10px; background-color: #ffffff}
+	h1 {margin: 5px 0 0 0; font-size: 18px; font-weight: normal; text-align: center}
+	header {margin: -24px 0 5px 0; line-height: 24px}
+	button {font: 12px sans-serif; cursor: pointer}
+	p {margin: 5px 0 5px 0}
+	a {color: #0366d6}
+	#hl {position: absolute; display: none; overflow: hidden; white-space: nowrap; pointer-events: none; background-color: #ffffe0; outline: 1px solid #ffc000; height: 15px}
+	#hl span {padding: 0 3px 0 3px}
+	#status {overflow: hidden; white-space: nowrap}
+	#match {overflow: hidden; white-space: nowrap; display: none; float: right; text-align: right}
+	#reset {cursor: pointer}
+	#canvas {width: 100%; height: 1104px}
+</style>
+</head>
+<body style='font: 12px Verdana, sans-serif'>
+<h1>CPU profile</h1>
+<header style='text-align: left'><button id='reverse' title='Reverse'>&#x1f53b;</button>&nbsp;&nbsp;<button id='search' title='Search'>&#x1f50d;</button></header>
+<header style='text-align: right'>Produced by <a href='https://github.com/jvm-profiling-tools/async-profiler'>async-profiler</a></header>
+<canvas id='canvas'></canvas>
+<div id='hl'><span></span></div>
+<p id='match'>Matched: <span id='matchval'></span> <span id='reset' title='Clear'>&#x274c;</span></p>
+<p id='status'>&nbsp;</p>
+<script>
+	// Copyright 2020 Andrei Pangin
+	// Licensed under the Apache License, Version 2.0.
+	'use strict';
+	var root, rootLevel, px, pattern;
+	var reverse = false;
+	const levels = Array(69);
+	for (let h = 0; h < levels.length; h++) {
+		levels[h] = [];
+	}
+
+	const canvas = document.getElementById('canvas');
+	const c = canvas.getContext('2d');
+	const hl = document.getElementById('hl');
+	const status = document.getElementById('status');
+
+	const canvasWidth = canvas.offsetWidth;
+	const canvasHeight = canvas.offsetHeight;
+	canvas.style.width = canvasWidth + 'px';
+	canvas.width = canvasWidth * (devicePixelRatio || 1);
+	canvas.height = canvasHeight * (devicePixelRatio || 1);
+	if (devicePixelRatio) c.scale(devicePixelRatio, devicePixelRatio);
+	c.font = document.body.style.font;
+
+	const palette = [
+		[0xb2e1b2, 20, 20, 20],
+		[0x50e150, 30, 30, 30],
+		[0x50cccc, 30, 30, 30],
+		[0xe15a5a, 30, 40, 40],
+		[0xc8c83c, 30, 30, 10],
+		[0xe17d00, 30, 30,  0],
+		[0xcce880, 20, 20, 20],
+	];
+
+	function getColor(p) {
+		const v = Math.random();
+		return '#' + (p[0] + ((p[1] * v) << 16 | (p[2] * v) << 8 | (p[3] * v))).toString(16);
+	}
+
+	function f(level, left, width, type, title, inln, c1, int) {
+		levels[level].push({left: left, width: width, color: getColor(palette[type]), title: title,
+			details: (int ? ', int=' + int : '') + (c1 ? ', c1=' + c1 : '') + (inln ? ', inln=' + inln : '')
+		});
+	}
+
+	function samples(n) {
+		return n === 1 ? '1 sample' : n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' samples';
+	}
+
+	function pct(a, b) {
+		return a >= b ? '100' : (100 * a / b).toFixed(2);
+	}
+
+	function findFrame(frames, x) {
+		let left = 0;
+		let right = frames.length - 1;
+
+		while (left <= right) {
+			const mid = (left + right) >>> 1;
+			const f = frames[mid];
+
+			if (f.left > x) {
+				right = mid - 1;
+			} else if (f.left + f.width <= x) {
+				left = mid + 1;
+			} else {
+				return f;
+			}
+		}
+
+		if (frames[left] && (frames[left].left - x) * px < 0.5) return frames[left];
+		if (frames[right] && (x - (frames[right].left + frames[right].width)) * px < 0.5) return frames[right];
+
+		return null;
+	}
+
+	function search(r) {
+		if (r === true && (r = prompt('Enter regexp to search:', '')) === null) {
+			return;
+		}
+
+		pattern = r ? RegExp(r) : undefined;
+		const matched = render(root, rootLevel);
+		document.getElementById('matchval').textContent = pct(matched, root.width) + '%';
+		document.getElementById('match').style.display = r ? 'inherit' : 'none';
+	}
+
+	function render(newRoot, newLevel) {
+		if (root) {
+			c.fillStyle = '#ffffff';
+			c.fillRect(0, 0, canvasWidth, canvasHeight);
+		}
+
+		root = newRoot || levels[0][0];
+		rootLevel = newLevel || 0;
+		px = canvasWidth / root.width;
+
+		const x0 = root.left;
+		const x1 = x0 + root.width;
+		const marked = [];
+
+		function mark(f) {
+			return marked[f.left] >= f.width || (marked[f.left] = f.width);
+		}
+
+		function totalMarked() {
+			let total = 0;
+			let left = 0;
+			Object.keys(marked).sort(function(a, b) { return a - b; }).forEach(function(x) {
+				if (+x >= left) {
+					total += marked[x];
+					left = +x + marked[x];
+				}
+			});
+			return total;
+		}
+
+		function drawFrame(f, y, alpha) {
+			if (f.left < x1 && f.left + f.width > x0) {
+				c.fillStyle = pattern && f.title.match(pattern) && mark(f) ? '#ee00ee' : f.color;
+				c.fillRect((f.left - x0) * px, y, f.width * px, 15);
+
+				if (f.width * px >= 21) {
+					const chars = Math.floor(f.width * px / 7);
+					const title = f.title.length <= chars ? f.title : f.title.substring(0, chars - 2) + '..';
+					c.fillStyle = '#000000';
+					c.fillText(title, Math.max(f.left - x0, 0) * px + 3, y + 12, f.width * px - 6);
+				}
+
+				if (alpha) {
+					c.fillStyle = 'rgba(255, 255, 255, 0.5)';
+					c.fillRect((f.left - x0) * px, y, f.width * px, 15);
+				}
+			}
+		}
+
+		for (let h = 0; h < levels.length; h++) {
+			const y = reverse ? h * 16 : canvasHeight - (h + 1) * 16;
+			const frames = levels[h];
+			for (let i = 0; i < frames.length; i++) {
+				drawFrame(frames[i], y, h < rootLevel);
+			}
+		}
+
+		return totalMarked();
+	}
+
+	canvas.onmousemove = function() {
+		const h = Math.floor((reverse ? event.offsetY : (canvasHeight - event.offsetY)) / 16);
+		if (h >= 0 && h < levels.length) {
+			const f = findFrame(levels[h], event.offsetX / px + root.left);
+			if (f) {
+				if (f != root) getSelection().removeAllRanges();
+				hl.style.left = (Math.max(f.left - root.left, 0) * px + canvas.offsetLeft) + 'px';
+				hl.style.width = (Math.min(f.width, root.width) * px) + 'px';
+				hl.style.top = ((reverse ? h * 16 : canvasHeight - (h + 1) * 16) + canvas.offsetTop) + 'px';
+				hl.firstChild.textContent = f.title;
+				hl.style.display = 'block';
+				canvas.title = f.title + '\n(' + samples(f.width) + f.details + ', ' + pct(f.width, levels[0][0].width) + '%)';
+				canvas.style.cursor = 'pointer';
+				canvas.onclick = function() {
+					if (f != root) {
+						render(f, h);
+						canvas.onmousemove();
+					}
+				};
+				status.textContent = 'Function: ' + canvas.title;
+				return;
+			}
+		}
+		canvas.onmouseout();
+	}
+
+	canvas.onmouseout = function() {
+		hl.style.display = 'none';
+		status.textContent = '\xa0';
+		canvas.title = '';
+		canvas.style.cursor = '';
+		canvas.onclick = '';
+	}
+
+	canvas.ondblclick = function() {
+		getSelection().selectAllChildren(hl);
+	}
+
+	document.getElementById('reverse').onclick = function() {
+		reverse = !reverse;
+		render();
+	}
+
+	document.getElementById('search').onclick = function() {
+		search(true);
+	}
+
+	document.getElementById('reset').onclick = function() {
+		search(false);
+	}
+
+	window.onkeydown = function() {
+		if (event.ctrlKey && event.keyCode === 70) {
+			event.preventDefault();
+			search(true);
+		} else if (event.keyCode === 27) {
+			search(false);
+		}
+	}
+
+f(0,0,648,3,'all')
+f(1,0,2,3,'[unknown_Java]')
+f(2,0,2,3,'__pthread_cond_signal')
+f(3,0,2,5,'entry_SYSCALL_64_after_hwframe')
+f(4,0,2,5,'do_syscall_64')
+f(5,0,2,5,'__x64_sys_futex')
+f(6,0,2,5,'do_futex')
+f(7,0,2,5,'futex_wake')
+f(8,0,2,5,'wake_up_q')
+f(9,0,2,5,'try_to_wake_up')
+f(10,0,2,5,'__lock_text_start')
+f(1,2,1,3,'clock_gettime')
+f(2,2,1,3,'[vdso]')
+f(1,3,644,1,'java/lang/Thread.run')
+f(2,3,480,1,'io/netty/util/internal/ThreadExecutorMap$2.run')
+f(3,3,480,1,'io/netty/util/concurrent/SingleThreadEventExecutor$4.run')
+f(4,3,480,1,'io/netty/channel/nio/NioEventLoop.run')
+f(5,3,4,1,'io/netty/channel/nio/NioEventLoop.processSelectedKeys')
+f(6,3,4,1,'io/netty/channel/nio/NioEventLoop.processSelectedKeysOptimized')
+f(7,3,4,1,'io/netty/channel/nio/NioEventLoop.processSelectedKey')
+f(8,3,4,1,'io/netty/channel/nio/AbstractNioByteChannel$NioByteUnsafe.read')
+f(9,3,3,1,'io/netty/channel/DefaultChannelPipeline.fireChannelRead')
+f(10,3,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(11,3,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(12,3,3,1,'io/netty/channel/DefaultChannelPipeline$HeadContext.channelRead')
+f(13,3,3,1,'io/netty/channel/AbstractChannelHandlerContext.fireChannelRead')
+f(14,3,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(15,3,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(16,3,3,1,'io/netty/handler/codec/ByteToMessageDecoder.channelRead')
+f(17,3,1,2,'io/netty/handler/codec/ByteToMessageDecoder$1.cumulate',1,0,0)
+f(17,4,2,1,'io/netty/handler/codec/ByteToMessageDecoder.fireChannelRead')
+f(18,4,2,1,'io/netty/channel/AbstractChannelHandlerContext.fireChannelRead')
+f(19,4,2,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(20,4,2,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(21,4,2,1,'io/netty/handler/codec/ByteToMessageDecoder.channelRead')
+f(22,4,1,2,'io/netty/handler/codec/ByteToMessageDecoder$1.cumulate',1,0,0)
+f(22,5,1,1,'io/netty/handler/codec/ByteToMessageDecoder.fireChannelRead')
+f(23,5,1,1,'io/netty/channel/AbstractChannelHandlerContext.fireChannelRead')
+f(24,5,1,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(25,5,1,1,'io/netty/channel/AbstractChannelHandlerContext.invokeChannelRead')
+f(26,5,1,1,'io/netty/channel/SimpleChannelInboundHandler.channelRead')
+f(27,5,1,1,'org/apache/avro/ipc/netty/NettyTransceiver$NettyClientAvroHandler.channelRead0')
+f(28,5,1,1,'org/apache/avro/ipc/netty/NettyTransceiver$NettyClientAvroHandler.channelRead0')
+f(29,5,1,1,'org/apache/avro/ipc/Requestor$TransceiverCallback.handleResult')
+f(30,5,1,1,'org/apache/avro/ipc/Requestor$TransceiverCallback.handleResult')
+f(31,5,1,1,'org/apache/avro/ipc/CallFuture.handleResult')
+f(32,5,1,1,'java/util/concurrent/CountDownLatch.countDown')
+f(33,5,1,1,'java/util/concurrent/locks/AbstractQueuedSynchronizer.releaseShared')
+f(34,5,1,1,'java/util/concurrent/locks/AbstractQueuedSynchronizer.signalNext')
+f(35,5,1,1,'java/util/concurrent/locks/LockSupport.unpark')
+f(36,5,1,1,'jdk/internal/misc/Unsafe.unpark')
+f(37,5,1,3,'__pthread_cond_signal')
+f(38,5,1,5,'entry_SYSCALL_64_after_hwframe')
+f(39,5,1,5,'do_syscall_64')
+f(40,5,1,5,'__x64_sys_futex')
+f(41,5,1,5,'do_futex')
+f(42,5,1,5,'futex_wake')
+f(43,5,1,5,'wake_up_q')
+f(44,5,1,5,'try_to_wake_up')
+f(45,5,1,5,'__lock_text_start')
+f(9,6,1,1,'io/netty/channel/socket/nio/NioSocketChannel.doReadBytes')
+f(10,6,1,1,'io/netty/buffer/AbstractByteBuf.writeBytes')
+f(11,6,1,1,'io/netty/buffer/PooledByteBuf.setBytes')
+f(12,6,1,1,'sun/nio/ch/SocketChannelImpl.read')
+f(13,6,1,1,'sun/nio/ch/IOUtil.read')
+f(14,6,1,1,'sun/nio/ch/IOUtil.read')
+f(15,6,1,1,'sun/nio/ch/IOUtil.readIntoNativeBuffer')
+f(16,6,1,1,'sun/nio/ch/SocketDispatcher.read')
+f(17,6,1,1,'sun/nio/ch/SocketDispatcher.read0')
+f(18,6,1,3,'__libc_read')
+f(19,6,1,5,'entry_SYSCALL_64_after_hwframe')
+f(20,6,1,5,'do_syscall_64')
+f(21,6,1,5,'ksys_read')
+f(22,6,1,5,'vfs_read')
+f(23,6,1,5,'new_sync_read')
+f(24,6,1,5,'sock_read_iter')
+f(25,6,1,5,'inet_recvmsg')
+f(26,6,1,5,'tcp_recvmsg')
+f(27,6,1,5,'skb_copy_datagram_iter')
+f(28,6,1,5,'__skb_datagram_iter')
+f(29,6,1,5,'simple_copy_to_iter')
+f(30,6,1,5,'__check_object_size.part.0')
+f(31,6,1,5,'__virt_addr_valid')
+f(5,7,5,1,'io/netty/channel/nio/NioEventLoop.select')
+f(6,7,5,1,'io/netty/channel/nio/SelectedSelectionKeySetSelector.select')
+f(7,7,5,1,'sun/nio/ch/SelectorImpl.select')
+f(8,7,5,1,'sun/nio/ch/SelectorImpl.lockAndDoSelect')
+f(9,7,5,1,'sun/nio/ch/EPollSelectorImpl.doSelect')
+f(10,7,5,1,'sun/nio/ch/EPoll.wait')
+f(11,7,1,3,'Java_sun_nio_ch_EPoll_wait')
+f(11,8,4,3,'epoll_wait')
+f(12,8,4,5,'entry_SYSCALL_64_after_hwframe')
+f(13,8,3,5,'do_syscall_64')
+f(14,8,3,5,'__x64_sys_epoll_wait')
+f(15,8,3,5,'do_epoll_wait')
+f(16,9,2,5,'ep_poll')
+f(17,9,2,5,'ep_scan_ready_list.constprop.0')
+f(18,10,1,5,'ep_send_events_proc')
+f(19,10,1,5,'ep_item_poll')
+f(20,10,1,5,'eventfd_poll')
+f(13,11,1,5,'syscall_exit_to_user_mode')
+f(14,11,1,5,'exit_to_user_mode_prepare')
+f(15,11,1,5,'exit_to_user_mode_loop')
+f(16,11,1,5,'schedule')
+f(17,11,1,5,'__schedule')
+f(18,11,1,5,'finish_task_switch')
+f(5,12,471,1,'io/netty/util/concurrent/SingleThreadEventExecutor.runAllTasks')
+f(6,12,471,1,'io/netty/util/concurrent/AbstractEventExecutor.safeExecute')
+f(7,12,471,1,'io/netty/channel/AbstractChannelHandlerContext$WriteTask.run')
+f(8,12,471,1,'io/netty/channel/AbstractChannelHandlerContext.invokeWriteAndFlush')
+f(9,12,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeFlush0')
+f(10,12,3,1,'io/netty/channel/ChannelOutboundHandlerAdapter.flush')
+f(11,12,3,1,'io/netty/channel/AbstractChannelHandlerContext.flush')
+f(12,12,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeFlush')
+f(13,12,3,1,'io/netty/channel/AbstractChannelHandlerContext.invokeFlush0')
+f(14,12,3,1,'io/netty/channel/DefaultChannelPipeline$HeadContext.flush')
+f(15,12,3,1,'io/netty/channel/AbstractChannel$AbstractUnsafe.flush')
+f(16,12,3,1,'io/netty/channel/nio/AbstractNioChannel$AbstractNioUnsafe.flush0')
+f(17,12,3,1,'io/netty/channel/AbstractChannel$AbstractUnsafe.flush0')
+f(18,12,3,1,'io/netty/channel/socket/nio/NioSocketChannel.doWrite')
+f(19,12,3,1,'sun/nio/ch/SocketChannelImpl.write')
+f(20,12,3,1,'sun/nio/ch/IOUtil.write')
+f(21,12,3,1,'sun/nio/ch/IOUtil.write')
+f(22,12,3,1,'sun/nio/ch/IOUtil.writeFromNativeBuffer')
+f(23,12,3,1,'sun/nio/ch/SocketDispatcher.write')
+f(24,12,3,1,'sun/nio/ch/FileDispatcherImpl.write0')
+f(25,12,2,3,'__libc_write')
+f(26,12,2,5,'entry_SYSCALL_64_after_hwframe')
+f(27,12,2,5,'do_syscall_64')
+f(28,12,2,5,'ksys_write')
+f(29,12,2,5,'vfs_write')
+f(30,12,2,5,'new_sync_write')
+f(31,12,2,5,'sock_write_iter')
+f(32,12,2,5,'sock_sendmsg')
+f(33,12,2,5,'tcp_sendmsg')
+f(34,12,2,5,'tcp_sendmsg_locked')
+f(35,12,2,5,'__tcp_push_pending_frames')
+f(36,12,2,5,'tcp_write_xmit')
+f(37,12,2,5,'__tcp_transmit_skb')
+f(38,12,2,5,'__ip_queue_xmit')
+f(39,12,2,5,'ip_finish_output2')
+f(40,12,2,5,'__local_bh_enable_ip')
+f(41,12,2,5,'do_softirq')
+f(42,12,2,5,'do_softirq_own_stack')
+f(43,12,2,5,'asm_call_sysvec_on_stack')
+f(44,12,2,5,'__softirqentry_text_start')
+f(45,12,2,5,'net_rx_action')
+f(46,12,2,5,'napi_poll')
+f(47,12,2,5,'process_backlog')
+f(48,12,2,5,'__netif_receive_skb_one_core')
+f(49,12,2,5,'__netif_receive_skb_core')
+f(50,12,2,5,'nf_hook_bridge_pre?[bridge]')
+f(51,12,2,5,'br_nf_pre_routing?[br_netfilter]')
+f(52,12,2,5,'br_nf_pre_routing_finish?[br_netfilter]')
+f(53,12,2,5,'br_nf_hook_thresh?[br_netfilter]')
+f(54,12,2,5,'br_handle_frame_finish?[bridge]')
+f(55,12,2,5,'netif_receive_skb')
+f(56,12,2,5,'netif_receive_skb_internal')
+f(57,12,2,5,'__netif_receive_skb_one_core')
+f(58,12,2,5,'ip_rcv')
+f(59,12,2,5,'nf_hook_slow')
+f(60,12,2,5,'ip_sabotage_in?[br_netfilter]')
+f(61,12,1,5,'ip_finish_output2')
+f(62,12,1,5,'__dev_queue_xmit')
+f(63,12,1,5,'__dev_xmit_skb')
+f(64,12,1,5,'__qdisc_run')
+f(65,12,1,5,'sch_direct_xmit')
+f(66,12,1,5,'dev_hard_start_xmit')
+f(67,12,1,5,'xmit_one.constprop.0')
+f(68,12,1,5,'dev_queue_xmit_nit')
+f(61,13,1,5,'ip_output')
+f(62,13,1,5,'nf_hook_slow')
+f(63,13,1,5,'nf_nat_ipv4_out?[nf_nat]')
+f(64,13,1,5,'nf_nat_manip_pkt?[nf_nat]')
+f(65,13,1,5,'nf_nat_ipv4_manip_pkt?[nf_nat]')
+f(66,13,1,5,'skb_ensure_writable')
+f(25,14,1,3,'fdval')
+f(9,15,468,1,'io/netty/channel/AbstractChannelHandlerContext.invokeWrite0')
+f(10,15,468,1,'io/netty/handler/codec/MessageToMessageEncoder.write')
+f(11,15,468,1,'io/netty/channel/AbstractChannelHandlerContext.write')
+f(12,15,468,1,'io/netty/channel/AbstractChannelHandlerContext.write')
+f(13,15,468,1,'io/netty/channel/AbstractChannelHandlerContext.invokeWrite')
+f(14,15,468,1,'io/netty/channel/AbstractChannelHandlerContext.invokeWrite0')
+f(15,15,468,1,'io/netty/handler/codec/MessageToByteEncoder.write')
+f(16,15,468,1,'io/netty/handler/codec/compression/JZlibEncoder.encode')
+f(17,15,468,1,'io/netty/handler/codec/compression/JZlibEncoder.encode')
+f(18,15,451,1,'com/jcraft/jzlib/Deflater.deflate')
+f(19,15,451,1,'com/jcraft/jzlib/Deflate.deflate')
+f(20,15,451,1,'com/jcraft/jzlib/Deflate.deflate_slow')
+f(21,276,136,1,'com/jcraft/jzlib/Deflate.fill_window')
+f(22,350,61,1,'com/jcraft/jzlib/ZStream.read_buf')
+f(23,350,61,1,'com/jcraft/jzlib/Adler32.update')
+f(22,411,1,3,'jbyte_disjoint_arraycopy_avx3')
+f(21,412,5,1,'com/jcraft/jzlib/Deflate.flush_block_only')
+f(22,412,5,1,'com/jcraft/jzlib/Deflate._tr_flush_block')
+f(23,412,4,1,'com/jcraft/jzlib/Deflate.compress_block')
+f(24,412,4,2,'com/jcraft/jzlib/Tree.d_code',4,0,0)
+f(23,416,1,1,'com/jcraft/jzlib/Deflate.send_all_trees')
+f(24,416,1,1,'com/jcraft/jzlib/Deflate.send_tree')
+f(21,417,49,1,'com/jcraft/jzlib/Deflate.longest_match')
+f(22,465,1,5,'asm_sysvec_apic_timer_interrupt')
+f(23,465,1,5,'sysvec_apic_timer_interrupt')
+f(24,465,1,5,'irq_exit_rcu')
+f(25,465,1,5,'do_softirq_own_stack')
+f(26,465,1,5,'asm_call_sysvec_on_stack')
+f(27,465,1,5,'__softirqentry_text_start')
+f(18,466,1,1,'io/netty/buffer/AbstractByteBuf.ensureWritable')
+f(19,466,1,1,'io/netty/buffer/AbstractByteBuf.ensureWritable0')
+f(20,466,1,1,'io/netty/buffer/PooledByteBuf.capacity')
+f(21,466,1,1,'io/netty/buffer/PoolArena.reallocate')
+f(22,466,1,1,'io/netty/buffer/PoolArena.allocate')
+f(23,466,1,1,'io/netty/buffer/PoolArena.tcacheAllocateNormal')
+f(24,466,1,1,'io/netty/buffer/PoolArena.allocateNormal')
+f(25,466,1,1,'io/netty/buffer/PoolChunkList.allocate')
+f(26,466,1,2,'io/netty/buffer/PoolChunk.allocate',1,0,0)
+f(27,466,1,2,'io/netty/buffer/PoolChunk.allocateRun',1,0,0)
+f(28,466,1,2,'io/netty/buffer/PoolChunk.runFirstBestFit',1,0,0)
+f(18,467,9,1,'io/netty/buffer/CompositeByteBuf.getBytes')
+f(19,467,9,1,'io/netty/buffer/CompositeByteBuf.getBytes')
+f(20,467,9,1,'io/netty/buffer/CompositeByteBuf.getBytes')
+f(21,467,9,1,'io/netty/buffer/UnpooledHeapByteBuf.getBytes')
+f(22,467,9,1,'io/netty/buffer/AbstractByteBuf.checkDstIndex')
+f(23,467,9,1,'io/netty/buffer/AbstractByteBuf.checkIndex')
+f(24,467,9,1,'io/netty/buffer/AbstractByteBuf.ensureAccessible')
+f(25,467,9,1,'io/netty/buffer/AbstractReferenceCountedByteBuf.isAccessible')
+f(26,467,9,1,'io/netty/util/internal/ReferenceCountUpdater.isLiveNonVolatile')
+f(27,467,9,4,'OptoRuntime::new_array_C(Klass*, int, JavaThread*)')
+f(28,467,9,4,'TypeArrayKlass::allocate_common(int, bool, JavaThread*)')
+f(29,467,9,4,'MemAllocator::allocate() const')
+f(30,467,8,3,'/lib/x86_64-linux-gnu/libc-2.31.so')
+f(30,475,1,4,'G1CollectedHeap::mem_allocate(unsigned long, bool*)')
+f(31,475,1,4,'G1CollectedHeap::attempt_allocation_slow(unsigned long)')
+f(32,475,1,4,'G1CollectedHeap::retire_mutator_alloc_region(HeapRegion*, unsigned long)')
+f(18,476,7,3,'jbyte_disjoint_arraycopy_avx3')
+f(2,483,41,1,'java/util/concurrent/ThreadPoolExecutor$Worker.run')
+f(3,483,41,1,'java/util/concurrent/ThreadPoolExecutor.runWorker',0,0,2)
+f(4,485,1,1,'I2C/C2I adapters')
+f(4,486,37,1,'java/util/concurrent/FutureTask.run')
+f(5,486,1,1,'java/util/concurrent/FutureTask.set')
+f(6,486,1,1,'java/util/concurrent/FutureTask.finishCompletion')
+f(7,486,1,1,'java/util/concurrent/locks/LockSupport.unpark')
+f(8,486,1,1,'jdk/internal/misc/Unsafe.unpark')
+f(9,486,1,3,'__pthread_cond_signal')
+f(10,486,1,5,'entry_SYSCALL_64_after_hwframe')
+f(11,486,1,5,'do_syscall_64')
+f(12,486,1,5,'__x64_sys_futex')
+f(13,486,1,5,'do_futex')
+f(14,486,1,5,'futex_wake')
+f(15,486,1,5,'wake_up_q')
+f(16,486,1,5,'try_to_wake_up')
+f(17,486,1,5,'__lock_text_start')
+f(5,487,36,1,'org/apache/flume/api/NettyAvroRpcClient$2.call')
+f(6,487,36,1,'org/apache/flume/api/NettyAvroRpcClient$2.call')
+f(7,487,36,1,'jdk/proxy2/$Proxy39.appendBatch')
+f(8,487,36,1,'org/apache/avro/ipc/specific/SpecificRequestor.invoke')
+f(9,487,36,1,'org/apache/avro/ipc/Requestor.request')
+f(10,487,36,1,'org/apache/avro/ipc/Requestor.request')
+f(11,487,35,1,'org/apache/avro/ipc/Requestor$Request.getBytes')
+f(12,487,35,1,'org/apache/avro/ipc/specific/SpecificRequestor.writeRequest')
+f(13,487,35,1,'org/apache/avro/generic/GenericDatumWriter.write')
+f(14,487,35,1,'org/apache/avro/generic/GenericDatumWriter.write')
+f(15,487,35,1,'org/apache/avro/generic/GenericDatumWriter.writeWithoutConversion')
+f(16,487,35,1,'org/apache/avro/generic/GenericDatumWriter.writeArray')
+f(17,487,35,1,'org/apache/avro/generic/GenericDatumWriter.write')
+f(18,487,35,1,'org/apache/avro/generic/GenericDatumWriter.writeWithoutConversion')
+f(19,487,35,1,'org/apache/avro/specific/SpecificDatumWriter.writeRecord',4,0,0)
+f(20,487,35,1,'org/apache/avro/generic/GenericDatumWriter.writeRecord',4,0,0)
+f(21,489,33,1,'org/apache/avro/specific/SpecificDatumWriter.writeField',2,0,0)
+f(22,491,31,1,'org/apache/avro/generic/GenericDatumWriter.writeWithoutConversion')
+f(23,497,8,3,'jbyte_disjoint_arraycopy_avx3')
+f(23,505,13,1,'org/apache/avro/generic/GenericDatumWriter.writeBytes')
+f(24,505,13,1,'org/apache/avro/io/BinaryEncoder.writeBytes')
+f(25,505,13,1,'org/apache/avro/io/BufferedBinaryEncoder.writeFixed')
+f(26,505,13,1,'org/apache/avro/io/Encoder.writeFixed')
+f(27,505,13,1,'org/apache/avro/io/BufferedBinaryEncoder.writeFixed')
+f(28,505,13,1,'org/apache/avro/io/BufferedBinaryEncoder.ensureBounds')
+f(29,505,13,1,'org/apache/avro/io/BufferedBinaryEncoder.flushBuffer')
+f(30,505,13,1,'org/apache/avro/io/BufferedBinaryEncoder$OutputStreamSink.innerWrite')
+f(31,505,13,1,'org/apache/avro/util/ByteBufferOutputStream.write')
+f(32,505,10,1,'java/nio/ByteBuffer.allocate')
+f(32,515,1,1,'java/nio/HeapByteBuffer.put')
+f(33,515,1,3,'jbyte_disjoint_arraycopy_avx3')
+f(32,516,2,3,'jbyte_disjoint_arraycopy_avx3')
+f(23,518,4,2,'org/apache/avro/generic/GenericDatumWriter.writeMap',4,0,0)
+f(24,518,4,2,'java/util/HashMap$EntrySet.iterator',4,0,0)
+f(25,518,4,2,'java/util/HashMap$EntryIterator.<init>',4,0,0)
+f(26,518,4,2,'java/util/HashMap$HashIterator.<init>',4,0,0)
+f(11,522,1,1,'org/apache/avro/ipc/netty/NettyTransceiver.transceive')
+f(12,522,1,1,'org/apache/avro/ipc/netty/NettyTransceiver.writeDataPack')
+f(13,522,1,1,'io/netty/channel/AbstractChannel.writeAndFlush')
+f(14,522,1,1,'io/netty/channel/DefaultChannelPipeline.writeAndFlush')
+f(15,522,1,1,'io/netty/channel/AbstractChannelHandlerContext.writeAndFlush')
+f(16,522,1,1,'io/netty/channel/AbstractChannelHandlerContext.writeAndFlush')
+f(17,522,1,1,'io/netty/channel/AbstractChannelHandlerContext.write')
+f(18,522,1,1,'io/netty/channel/AbstractChannelHandlerContext.safeExecute')
+f(19,522,1,1,'io/netty/util/concurrent/SingleThreadEventExecutor.execute')
+f(20,522,1,1,'io/netty/util/concurrent/SingleThreadEventExecutor.execute')
+f(21,522,1,1,'io/netty/channel/nio/NioEventLoop.wakeup')
+f(22,522,1,1,'io/netty/channel/nio/SelectedSelectionKeySetSelector.wakeup')
+f(23,522,1,1,'sun/nio/ch/EPollSelectorImpl.wakeup')
+f(24,522,1,1,'sun/nio/ch/EventFD.set')
+f(25,522,1,1,'sun/nio/ch/EventFD.set0')
+f(26,522,1,3,'__libc_write')
+f(27,522,1,5,'entry_SYSCALL_64_after_hwframe')
+f(28,522,1,5,'do_syscall_64')
+f(29,522,1,5,'ksys_write')
+f(30,522,1,5,'vfs_write')
+f(31,522,1,5,'eventfd_write')
+f(4,523,1,1,'java/util/concurrent/ThreadPoolExecutor.getTask')
+f(5,523,1,1,'java/util/concurrent/SynchronousQueue.poll')
+f(6,523,1,1,'java/util/concurrent/SynchronousQueue$TransferStack.transfer')
+f(7,523,1,1,'java/util/concurrent/locks/LockSupport.parkNanos')
+f(8,523,1,1,'jdk/internal/misc/Unsafe.park')
+f(9,523,1,3,'Unsafe_Park')
+f(10,523,1,3,'__pthread_mutex_unlock_usercnt')
+f(11,523,1,5,'entry_SYSCALL_64_after_hwframe')
+f(12,523,1,5,'do_syscall_64')
+f(13,523,1,5,'syscall_enter_from_user_mode')
+f(2,524,3,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/EnhancedQueueExecutor$ThreadBody.run')
+f(3,524,3,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/EnhancedQueueExecutor$ThreadBody.doRunTask')
+f(4,524,3,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/EnhancedQueueExecutor.safeRun')
+f(5,524,3,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/ContextClassLoaderSavingRunnable.run')
+f(6,524,3,1,'net/thisptr/jmx/exporter/agent/shade/io/undertow/server/HttpServerExchange$1.run')
+f(7,524,3,1,'net/thisptr/jmx/exporter/agent/shade/io/undertow/server/Connectors.executeRootHandler')
+f(8,524,3,1,'net/thisptr/jmx/exporter/agent/ExporterHttpHandler.handleRequest')
+f(9,524,3,1,'net/thisptr/jmx/exporter/agent/ExporterHttpHandler.handleGetMetrics')
+f(10,524,3,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper.scrape')
+f(11,524,3,1,'net/thisptr/jmx/exporter/agent/utils/MoreCollections.forEachSlowlyOverDuration')
+f(12,524,3,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper$$Lambda$226.0x0000000800fd34f0.accept')
+f(13,524,3,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper.lambda$scrape$0')
+f(14,524,3,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper.scrape')
+f(15,524,2,1,'com/sun/jmx/mbeanserver/JmxMBeanServer.getAttributes')
+f(16,524,2,1,'com/sun/jmx/interceptor/DefaultMBeanServerInterceptor.getAttributes')
+f(17,524,1,1,'com/sun/jmx/mbeanserver/MBeanSupport.getAttributes')
+f(18,524,1,1,'com/sun/jmx/mbeanserver/MBeanSupport.getAttribute')
+f(19,524,1,1,'com/sun/jmx/mbeanserver/PerInterface.getAttribute')
+f(20,524,1,1,'com/sun/jmx/mbeanserver/MBeanIntrospector.invokeM')
+f(21,524,1,1,'com/sun/jmx/mbeanserver/MXBeanIntrospector.invokeM2')
+f(22,524,1,1,'com/sun/jmx/mbeanserver/MXBeanIntrospector.invokeM2')
+f(23,524,1,1,'com/sun/jmx/mbeanserver/ConvertingMethod.invokeWithOpenReturn')
+f(24,524,1,1,'com/sun/jmx/mbeanserver/ConvertingMethod.invokeWithOpenReturn')
+f(25,524,1,1,'sun/reflect/misc/MethodUtil.invoke')
+f(26,524,1,1,'java/lang/reflect/Method.invoke')
+f(27,524,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invoke')
+f(28,524,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invokeImpl')
+f(29,524,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000800d9d400.invokeExact_MT')
+f(30,524,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000800fe8400.invoke')
+f(31,524,1,1,'java/lang/invoke/DirectMethodHandle$Holder.invokeStatic')
+f(32,524,1,1,'sun/reflect/misc/Trampoline.invoke')
+f(33,524,1,1,'java/lang/reflect/Method.invoke')
+f(34,524,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invoke')
+f(35,524,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invokeImpl')
+f(36,524,1,1,'java/lang/invoke/Invokers$Holder.invokeExact_MT')
+f(37,524,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000801014800.invoke')
+f(38,524,1,1,'java/lang/invoke/LambdaForm$DMH.0x0000000800ea0000.invokeInterface')
+f(39,524,1,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/EnhancedQueueExecutor$MXBeanImpl.getKeepAliveTimeSeconds')
+f(40,524,1,1,'net/thisptr/jmx/exporter/agent/shade/org/jboss/threads/EnhancedQueueExecutor.getKeepAliveTime')
+f(41,524,1,1,'java/time/Duration.of')
+f(42,524,1,6,'java/time/Duration.plus',0,1,0)
+f(43,524,1,2,'java/time/Duration.multipliedBy',1,0,0)
+f(44,524,1,2,'java/time/Duration.toBigDecimalSeconds',1,0,0)
+f(17,525,1,1,'javax/management/StandardMBean.getAttributes')
+f(18,525,1,1,'com/sun/jmx/mbeanserver/MBeanSupport.getAttributes')
+f(19,525,1,1,'com/sun/jmx/mbeanserver/MBeanSupport.getAttribute')
+f(20,525,1,1,'com/sun/jmx/mbeanserver/PerInterface.getAttribute')
+f(21,525,1,1,'com/sun/jmx/mbeanserver/MBeanIntrospector.invokeM')
+f(22,525,1,1,'com/sun/jmx/mbeanserver/MXBeanIntrospector.invokeM2')
+f(23,525,1,1,'com/sun/jmx/mbeanserver/MXBeanIntrospector.invokeM2')
+f(24,525,1,1,'com/sun/jmx/mbeanserver/ConvertingMethod.invokeWithOpenReturn')
+f(25,525,1,1,'com/sun/jmx/mbeanserver/ConvertingMethod.invokeWithOpenReturn')
+f(26,525,1,1,'sun/reflect/misc/MethodUtil.invoke')
+f(27,525,1,1,'java/lang/reflect/Method.invoke')
+f(28,525,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invoke')
+f(29,525,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invokeImpl')
+f(30,525,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000800d9d400.invokeExact_MT')
+f(31,525,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000800fe8400.invoke')
+f(32,525,1,1,'java/lang/invoke/DirectMethodHandle$Holder.invokeStatic')
+f(33,525,1,1,'sun/reflect/misc/Trampoline.invoke')
+f(34,525,1,1,'java/lang/reflect/Method.invoke')
+f(35,525,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invoke')
+f(36,525,1,1,'jdk/internal/reflect/DirectMethodHandleAccessor.invokeImpl')
+f(37,525,1,1,'java/lang/invoke/Invokers$Holder.invokeExact_MT')
+f(38,525,1,1,'java/lang/invoke/LambdaForm$MH.0x0000000801008000.invoke')
+f(39,525,1,1,'java/lang/invoke/LambdaForm$DMH.0x0000000800ea0000.invokeInterface')
+f(40,525,1,1,'com/sun/management/internal/OperatingSystemImpl.getOpenFileDescriptorCount')
+f(41,525,1,1,'com/sun/management/internal/OperatingSystemImpl.getOpenFileDescriptorCount0')
+f(42,525,1,3,'[unknown]')
+f(43,525,1,3,'getdents64')
+f(44,525,1,5,'entry_SYSCALL_64_after_hwframe')
+f(45,525,1,5,'do_syscall_64')
+f(46,525,1,5,'__x64_sys_getdents64')
+f(47,525,1,5,'iterate_dir')
+f(48,525,1,5,'proc_readfd_common')
+f(49,525,1,5,'proc_fill_cache')
+f(50,525,1,5,'proc_fd_instantiate')
+f(51,525,1,5,'proc_pid_make_inode')
+f(52,525,1,5,'new_inode')
+f(53,525,1,5,'alloc_inode')
+f(54,525,1,5,'inode_init_always')
+f(55,525,1,5,'security_inode_alloc')
+f(56,525,1,5,'kmem_cache_alloc')
+f(15,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$LocalLoadingCache.get')
+f(16,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache.getOrLoad')
+f(17,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache.get')
+f(18,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$Segment.get')
+f(19,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$Segment.scheduleRefresh')
+f(20,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$Segment.refresh')
+f(21,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$Segment.loadAsync')
+f(22,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/LocalCache$LoadingValueReference.loadFuture')
+f(23,526,1,1,'net/thisptr/jmx/exporter/agent/shade/com/google/common/cache/CacheLoader.reload')
+f(24,526,1,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper$1.load')
+f(25,526,1,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper$1.load')
+f(26,526,1,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper.access$000')
+f(27,526,1,1,'net/thisptr/jmx/exporter/agent/scraper/Scraper.prepare')
+f(28,526,1,1,'com/sun/jmx/mbeanserver/JmxMBeanServer.getMBeanInfo')
+f(29,526,1,1,'com/sun/jmx/interceptor/DefaultMBeanServerInterceptor.getMBeanInfo')
+f(30,526,1,1,'com/sun/management/internal/DiagnosticCommandImpl.getMBeanInfo')
+f(31,526,1,0,'com/sun/management/internal/DiagnosticCommandImpl.getDiagnosticCommandInfo',0,0,1)
+f(32,526,1,3,'Java_com_sun_management_internal_DiagnosticCommandImpl_getDiagnosticCommandInfo')
+f(33,526,1,3,'getDiagnosticCommandArgumentInfoArray')
+f(34,526,1,3,'JNU_NewObjectByName')
+f(35,526,1,3,'jni_NewObjectV')
+f(36,526,1,3,'jni_invoke_nonstatic(JNIEnv_*, JavaValue*, _jobject*, JNICallType, _jmethodID*, JNI_ArgumentPusher*, JavaThread*) [clone .constprop.0]')
+f(2,527,37,1,'org/apache/flume/SinkRunner$PollingRunner.run',0,0,1)
+f(3,528,36,1,'org/apache/flume/sink/DefaultSinkProcessor.process')
+f(4,528,36,1,'org/apache/flume/sink/AbstractRpcSink.process')
+f(5,528,12,1,'org/apache/flume/api/NettyAvroRpcClient.appendBatch')
+f(6,528,12,1,'org/apache/flume/api/NettyAvroRpcClient.appendBatch')
+f(7,528,2,1,'java/util/concurrent/AbstractExecutorService.submit')
+f(8,528,2,1,'java/util/concurrent/ThreadPoolExecutor.execute')
+f(9,528,2,1,'java/util/concurrent/SynchronousQueue.offer')
+f(10,528,2,1,'java/util/concurrent/SynchronousQueue$TransferStack.transfer')
+f(11,528,2,1,'java/util/concurrent/SynchronousQueue$TransferStack$SNode.tryMatch')
+f(12,528,2,1,'java/util/concurrent/locks/LockSupport.unpark')
+f(13,528,2,1,'jdk/internal/misc/Unsafe.unpark')
+f(14,528,2,3,'__pthread_cond_signal')
+f(15,528,2,5,'entry_SYSCALL_64_after_hwframe')
+f(16,528,2,5,'do_syscall_64')
+f(17,528,2,5,'__x64_sys_futex')
+f(18,528,2,5,'do_futex')
+f(19,528,2,5,'futex_wake')
+f(20,528,2,5,'wake_up_q')
+f(21,528,2,5,'try_to_wake_up')
+f(22,528,2,5,'__lock_text_start')
+f(7,530,3,1,'java/util/concurrent/FutureTask.get')
+f(8,530,3,1,'java/util/concurrent/FutureTask.awaitDone')
+f(9,531,2,1,'java/util/concurrent/locks/LockSupport.parkNanos')
+f(10,531,2,1,'jdk/internal/misc/Unsafe.park')
+f(11,531,2,3,'[unknown]')
+f(12,531,2,3,'__pthread_cond_timedwait')
+f(13,531,2,5,'entry_SYSCALL_64_after_hwframe')
+f(14,531,2,5,'do_syscall_64')
+f(15,531,2,5,'__x64_sys_futex')
+f(16,531,2,5,'do_futex')
+f(17,531,2,5,'futex_wait')
+f(18,531,2,5,'futex_wait_queue_me')
+f(19,531,2,5,'schedule')
+f(20,531,2,5,'__schedule')
+f(21,531,2,5,'finish_task_switch')
+f(7,533,6,2,'org/apache/flume/api/NettyAvroRpcClient.toCharSeqMap',6,0,0)
+f(8,533,6,2,'java/util/HashMap$EntrySet.iterator',6,0,0)
+f(9,533,6,2,'java/util/HashMap$EntryIterator.<init>',6,0,0)
+f(10,533,6,2,'java/util/HashMap$HashIterator.<init>',6,0,0)
+f(7,539,1,1,'org/apache/flume/api/NettyAvroRpcClient.waitForStatusOK')
+f(8,539,1,1,'org/apache/avro/ipc/CallFuture.get')
+f(9,539,1,1,'java/util/concurrent/CountDownLatch.await')
+f(10,539,1,1,'java/util/concurrent/locks/AbstractQueuedSynchronizer.tryAcquireSharedNanos')
+f(11,539,1,1,'java/util/concurrent/locks/AbstractQueuedSynchronizer.acquire')
+f(12,539,1,1,'java/util/concurrent/locks/LockSupport.parkNanos')
+f(13,539,1,1,'jdk/internal/misc/Unsafe.park')
+f(14,539,1,3,'Unsafe_Park')
+f(15,539,1,3,'__tls_get_addr')
+f(5,540,20,1,'org/apache/flume/channel/BasicChannelSemantics.take')
+f(6,540,20,1,'org/apache/flume/channel/BasicTransactionSemantics.take')
+f(7,540,20,1,'net/thisptr/flume/plugins/channel/synchronous/SynchronousChannel$SynchronousTransaction.doTake')
+f(8,551,1,1,'java/util/HashSet.add')
+f(9,551,1,1,'java/util/HashMap.put')
+f(10,551,1,1,'java/util/HashMap.hash')
+f(11,551,1,1,'java/lang/Object.hashCode')
+f(12,551,1,4,'ObjectSynchronizer::FastHashCode(Thread*, oopDesc*)')
+f(8,552,1,1,'java/util/LinkedList.remove')
+f(8,553,4,1,'java/util/concurrent/TimeUnit.timedWait')
+f(9,554,3,1,'java/lang/Object.wait')
+f(10,554,3,1,'java/lang/Object.wait')
+f(11,554,1,3,'JVM_MonitorWait')
+f(12,554,1,4,'ObjectSynchronizer::wait(Handle, long, JavaThread*)')
+f(13,554,1,4,'ObjectMonitor::wait(long, bool, JavaThread*)')
+f(14,554,1,3,'__pthread_cond_timedwait')
+f(11,555,2,3,'[unknown]')
+f(12,555,2,3,'__pthread_cond_timedwait')
+f(13,555,2,5,'entry_SYSCALL_64_after_hwframe')
+f(14,555,2,5,'do_syscall_64')
+f(15,555,2,5,'__x64_sys_futex')
+f(16,555,2,5,'do_futex')
+f(17,555,2,5,'futex_wait')
+f(18,555,2,5,'futex_wait_queue_me')
+f(19,555,2,5,'schedule')
+f(20,555,2,5,'__schedule')
+f(21,555,2,5,'finish_task_switch')
+f(8,557,3,2,'org/apache/flume/instrumentation/ChannelCounter.incrementEventTakeAttemptCount',2,0,0)
+f(9,557,3,2,'org/apache/flume/instrumentation/MonitoredCounterGroup.increment',2,0,0)
+f(10,557,3,2,'java/util/Collections$UnmodifiableMap.get',2,0,0)
+f(11,559,1,1,'java/util/HashMap.get')
+f(12,559,1,2,'java/util/HashMap.getNode',1,0,0)
+f(5,560,4,1,'org/apache/flume/channel/BasicTransactionSemantics.commit')
+f(6,560,4,1,'net/thisptr/flume/plugins/channel/synchronous/SynchronousChannel$SynchronousTransaction.doCommit')
+f(7,560,1,2,'java/util/LinkedList.clear',1,0,0)
+f(7,561,3,1,'java/util/stream/ReferencePipeline.collect')
+f(8,561,3,1,'java/util/stream/AbstractPipeline.evaluate')
+f(9,561,3,1,'java/util/stream/ReduceOps$ReduceOp.evaluateSequential')
+f(10,561,3,1,'java/util/stream/AbstractPipeline.wrapAndCopyInto')
+f(11,561,3,1,'java/util/stream/AbstractPipeline.copyInto')
+f(12,561,3,1,'java/util/LinkedList$LLSpliterator.forEachRemaining')
+f(13,561,3,1,'java/util/stream/ReferencePipeline$3$1.accept')
+f(14,561,2,1,'java/util/stream/ReduceOps$3ReducingSink.accept')
+f(15,561,2,1,'java/util/stream/Collectors$$Lambda$22.0x800000039.accept')
+f(16,561,2,1,'java/util/HashSet.add')
+f(17,561,2,1,'java/util/HashMap.put')
+f(18,561,2,1,'java/util/HashMap.hash')
+f(19,561,2,1,'java/lang/Object.hashCode')
+f(20,562,1,3,'JVM_IHashCode')
+f(14,563,1,1,'net/thisptr/flume/plugins/channel/synchronous/SynchronousChannel$SynchronousTransaction$$Lambda$260.0x0000000800d9cdd0.apply')
+f(2,564,83,1,'org/apache/flume/source/PollableSourceRunner$PollingRunner.run')
+f(3,564,83,1,'org/apache/flume/source/taildir/TaildirSource.process')
+f(4,564,83,1,'org/apache/flume/source/taildir/TaildirSource.tailFileProcess')
+f(5,564,20,1,'org/apache/flume/channel/ChannelProcessor.processEventBatch')
+f(6,569,11,2,'java/util/LinkedHashMap.get',6,0,0)
+f(7,569,11,2,'java/util/HashMap.getNode',6,0,0)
+f(8,575,5,1,'java/util/HashMap.hash')
+f(9,575,5,1,'java/lang/Object.hashCode')
+f(10,576,4,3,'JVM_IHashCode')
+f(11,579,1,4,'ObjectSynchronizer::FastHashCode(Thread*, oopDesc*)')
+f(6,580,1,2,'org/apache/flume/channel/BasicChannelSemantics.getTransaction',1,0,0)
+f(6,581,3,1,'org/apache/flume/channel/BasicTransactionSemantics.commit')
+f(7,581,3,1,'net/thisptr/flume/plugins/channel/synchronous/SynchronousChannel$SynchronousTransaction.doCommit')
+f(8,581,1,1,'java/lang/Object.notifyAll')
+f(9,581,1,3,'JVM_MonitorNotifyAll')
+f(10,581,1,4,'ObjectMonitor::notifyAll(JavaThread*)')
+f(8,582,2,1,'java/lang/Object.wait')
+f(9,582,2,1,'java/lang/Object.wait')
+f(10,582,2,3,'JVM_MonitorWait')
+f(11,582,2,4,'ObjectSynchronizer::wait(Handle, long, JavaThread*)')
+f(12,582,1,4,'ObjectSynchronizer::inflate(Thread*, oopDesc*, ObjectSynchronizer::InflateCause)')
+f(13,582,1,4,'ObjectMonitor::ObjectMonitor(oopDesc*)')
+f(14,582,1,4,'WeakHandle::WeakHandle(OopStorage*, oopDesc*)')
+f(15,582,1,4,'OopStorage::allocate()')
+f(16,582,1,4,'Mutex::lock_without_safepoint_check()')
+f(17,582,1,3,'/lib/x86_64-linux-gnu/ld-2.31.so')
+f(12,583,1,4,'java_lang_Thread::set_thread_status(oopDesc*, JavaThreadStatus)')
+f(5,584,63,1,'org/apache/flume/source/taildir/ReliableTaildirEventReader.readEvents')
+f(6,584,63,1,'org/apache/flume/source/taildir/TailFile.readEvents')
+f(7,584,63,1,'org/apache/flume/source/taildir/TailFile.readEvent',1,0,0)
+f(8,584,1,2,'java/lang/Long.valueOf',1,0,0)
+f(8,585,2,1,'org/apache/flume/event/EventBuilder.withBody')
+f(9,585,2,1,'org/apache/flume/event/EventBuilder.withBody')
+f(10,585,2,4,'OptoRuntime::new_instance_C(Klass*, JavaThread*)')
+f(11,585,2,4,'InstanceKlass::allocate_instance(JavaThread*)')
+f(12,585,2,4,'MemAllocator::allocate() const')
+f(13,585,2,4,'MemAllocator::allocate_inside_tlab_slow(MemAllocator::Allocation&) const')
+f(14,585,2,4,'G1CollectedHeap::allocate_new_tlab(unsigned long, unsigned long, unsigned long*)')
+f(15,585,2,4,'G1CollectedHeap::attempt_allocation_slow(unsigned long)')
+f(16,585,2,4,'G1AllocRegion::new_alloc_region_and_allocate(unsigned long, bool)')
+f(17,585,1,4,'G1CollectedHeap::new_mutator_alloc_region(unsigned long, bool, unsigned int)')
+f(18,585,1,4,'HeapRegionRemSet::clear_fcc()')
+f(17,586,1,4,'G1RemSetTrackingPolicy::update_at_allocate(HeapRegion*)')
+f(8,587,60,1,'org/apache/flume/source/taildir/TailFile.readLine')
+f(9,616,1,1,'java/io/RandomAccessFile.length')
+f(10,616,1,3,'Java_java_io_RandomAccessFile_length')
+f(11,616,1,3,'__fxstat64')
+f(12,616,1,5,'entry_SYSCALL_64_after_hwframe')
+f(13,616,1,5,'do_syscall_64')
+f(14,616,1,5,'__do_sys_newfstat')
+f(15,616,1,5,'vfs_fstat')
+f(16,616,1,5,'fput')
+f(9,617,1,3,'jbyte_disjoint_arraycopy_avx3')
+f(9,618,29,1,'org/apache/flume/source/taildir/TailFile.readFile')
+f(10,618,1,4,'OptoRuntime::new_array_C(Klass*, int, JavaThread*)')
+f(11,618,1,4,'TypeArrayKlass::allocate_common(int, bool, JavaThread*)')
+f(12,618,1,4,'MemAllocator::allocate() const')
+f(13,618,1,4,'AllocTracer::send_allocation_outside_tlab(Klass*, HeapWordImpl**, unsigned long, JavaThread*)')
+f(10,619,1,1,'java/io/RandomAccessFile.getFilePointer')
+f(11,619,1,3,'lseek64')
+f(12,619,1,5,'entry_SYSCALL_64_after_hwframe')
+f(13,619,1,5,'do_syscall_64')
+f(14,619,1,5,'syscall_enter_from_user_mode')
+f(10,620,1,1,'java/io/RandomAccessFile.length')
+f(11,620,1,3,'Java_java_io_RandomAccessFile_length')
+f(12,620,1,3,'__fxstat64')
+f(13,620,1,5,'entry_SYSCALL_64_after_hwframe')
+f(14,620,1,5,'do_syscall_64')
+f(15,620,1,5,'syscall_enter_from_user_mode')
+f(10,621,26,1,'java/io/RandomAccessFile.read',5,0,0)
+f(11,626,21,1,'java/io/RandomAccessFile.readBytes')
+f(12,626,21,3,'readBytes')
+f(13,626,1,3,'/lib/x86_64-linux-gnu/libc-2.31.so')
+f(13,627,20,3,'__libc_read')
+f(14,627,20,5,'entry_SYSCALL_64_after_hwframe')
+f(15,627,20,5,'do_syscall_64')
+f(16,627,20,5,'ksys_read')
+f(17,627,1,5,'__fdget_pos')
+f(18,627,1,5,'mutex_lock')
+f(17,628,19,5,'vfs_read')
+f(18,628,19,5,'new_sync_read')
+f(19,628,19,5,'generic_file_buffered_read')
+f(20,629,16,5,'copy_page_to_iter_iovec')
+f(21,630,15,5,'copy_user_enhanced_fast_string')
+f(20,645,2,5,'generic_file_buffered_read_get_pages')
+f(21,645,2,5,'find_get_pages_contig')
+f(1,647,1,3,'start_thread')
+f(2,647,1,3,'thread_native_entry(Thread*)')
+f(3,647,1,4,'Thread::call_run()')
+f(4,647,1,4,'WorkerThread::run()')
+f(5,647,1,4,'G1EvacuateRegionsBaseTask::work(unsigned int)')
+f(6,647,1,4,'G1EvacuateRegionsTask::scan_roots(G1ParScanThreadState*, unsigned int)')
+f(7,647,1,4,'G1RootProcessor::evacuate_roots(G1ParScanThreadState*, unsigned int)')
+f(8,647,1,4,'G1RootProcessor::process_java_roots(G1RootClosures*, G1GCPhaseTimes*, unsigned int)')
+f(9,647,1,4,'Threads::possibly_parallel_oops_do(bool, OopClosure*, CodeBlobClosure*)')
+f(10,647,1,4,'JavaThread::oops_do_frames(OopClosure*, CodeBlobClosure*) [clone .part.0]')
+f(11,647,1,4,'G1CodeBlobClosure::do_code_blob(CodeBlob*)')
+
+search();
+</script></body></html>
