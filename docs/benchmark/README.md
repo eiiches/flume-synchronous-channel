@@ -99,10 +99,10 @@ Numbers are average over 15 minutes.
 
 | Channel Type        | Event Size [bytes] | Throughput [events/s] | Sender CPU Usage [%] | Receiver CPU Usage [%] | Flame Graph                      |
 |---------------------|--------------------|-----------------------|----------------------|------------------------|----------------------------------|
-| File Channel (*1)   | 1                  | 48751.11              | 47.12 (*1)           | 30.78                  | results/max-1-file.html          |
-| Synchronous Channel | 1                  | 92753.33              | 2.63                 | 58.04                  | results/max-1-synchronous.html   |
-| File Channel (*1)   | 512                | 35997.78              | 49.58 (*1)           | 27.73                  | results/max-512-file.html        |
-| Synchronous Channel | 512                | 66257.78              | 12.37                | 54.52                  | results/max-512-synchronous.html |
+| File Channel (*1)   | 1                  | 48751.11              | 47.12 (*1)           | 30.78                  | [results/max-1-file.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/max-1-file.html) |
+| Synchronous Channel | 1                  | 92753.33              | 2.63                 | 58.04                  | [results/max-1-synchronous.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/max-1-synchronous.html) |
+| File Channel (*1)   | 512                | 35997.78              | 49.58 (*1)           | 27.73                  | [results/max-512-file.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/max-512-file.html) |
+| Synchronous Channel | 512                | 66257.78              | 12.37                | 54.52                  | [results/max-512-synchronous.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/max-512-synchronous.html) |
 
 (*1) The ChannelFillPercentage of the ch1 on the sender side is almost always 100% because taildir source read lines faster than avro sink can process. Due to synchronization overhead CPU usage gets significantly higher when File Channel is full.
 
@@ -124,9 +124,9 @@ Numbers are average over 15 minutes.
 
 | Channel Type        | Event Size [bytes] | Throughput [events/s] | Sender CPU Usage [%] | Receiver CPU Usage [%] | Flame Graph                      |
 |---------------------|--------------------|-----------------------|----------------------|------------------------|----------------------------------|
-| File Channel        | 1                  | 30137.78              | 18.60                | 20.51                  | results/30k-1-file.html          |
-| Synchronous Channel | 1                  | 30064.44              | 0.89                 | 20.75                  | results/30k-1-synchronous.html   |
-| File Channel        | 512                | 30030.0               | 28.23                | 23.95                  | results/30k-512-file.html        |
-| Synchronous Channel | 512                | 30062.22              | 5.28                 | 23.96                  | results/30k-512-synchronous.html |
+| File Channel        | 1                  | 30137.78              | 18.60                | 20.51                  | [results/30k-1-file.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/30k-1-file.html) |
+| Synchronous Channel | 1                  | 30064.44              | 0.89                 | 20.75                  | [results/30k-1-synchronous.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/30k-1-synchronous.html) |
+| File Channel        | 512                | 30030.0               | 28.23                | 23.95                  | [results/30k-512-file.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/30k-512-file.html) |
+| Synchronous Channel | 512                | 30062.22              | 5.28                 | 23.96                  | [results/30k-512-synchronous.html](https://htmlpreview.github.io/?https://github.com/eiiches/flume-synchronous-channel/blob/main/docs/benchmark/results/30k-512-synchronous.html) |
 
 
