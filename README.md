@@ -1,32 +1,40 @@
 Flume Synchronous Channel
 =========================
 
-An experimental Flume Channel in which every transaction that puts events must wait for corresponding transactions that take the events, like SynchronousQueue in Java.
+A Flume Channel in which every transaction that puts events waits for corresponding transactions that take the events, like [SynchronousQueue](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/SynchronousQueue.html).
+This channel can be used as a faster alternative to File Channel when the channel doesn't need to act as a reservoir. See [Choosing channel implementations](#choosing-channel-implementations) and [Performance](#performance).
 
 Motivation
 ----------
 
 Let's say, we have the following Flume configuration: `[Taildir Source] --> [File Channel] --> [Avro Sink]`.
-The Taildir Source reads lines of a log file as they are written by some application. File Channel temporarily buffers the events on the disk.
-We chose File Channel here instead of Memory Channel because we don't want to lose events. Avro Sink takes events from the channel and sends to a remote Flume instance.
+The Taildir Source reads lines of a log file as they are written by some application. File Channel temporarily stores the events on the disk.
+Avro Sink takes events from the channel and sends to a remote Flume instance. We chose File Channel instead of Memory Channel here because we don't want to lose events.
 
-Question here is, do we really need a File Channel? The log file itself already serves as a buffer, isn't the File Channel just extra unnecessary IO?
-Disks are slow and hard to maintain. What if, we can provide at-least once guarantee without using a disk? This is my experiment to answer these questions.
+The problem here is that we are basically writing the same data twice to the disk: one in the log file the Taildir Source is watching, and another in the File Channel.
+
+Considering the File Channel, in this case, doesn't need to act as a reservoir since the log file itself already works like one, we should be able to replace
+it with something new that behaves like [SynchronousQueue](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/SynchronousQueue.html).
+It should be more performant because it doesn't use disks. It doesn't lose events and provides at-least once delivery because events to the channel are synchronously taken from the channel.
 
 Usage
 -----
 
-We don't have a pre-built jar in the Maven Central yet. You need to build a jar manually.
+1. [Download a pre-built jar](https://repo1.maven.org/maven2/net/thisptr/flume/plugins/flume-synchronous-channel-1/0.0.1/flume-synchronous-channel-0.0.1.jar) and put it under `$FLUME_HOME/lib`.
 
-```bash
-mvn clean package
-cp target/flume-synchronous-channel-1.0.0-SNAPSHOT.jar $FLUME_HOME/lib
-```
+   Alternatively, you can build a jar manually:
 
-```
-agent.channels = ch1
-agent.channels.ch1.type = net.thisptr.flume.plugins.channel.synchronous.SynchronousChannel
-```
+   ```bash
+   mvn clean package
+   cp target/flume-synchronous-channel-1.0.0-SNAPSHOT.jar $FLUME_HOME/lib
+   ```
+
+2. Add SynchronousChannel to your Flume configuration.
+
+   ```
+   agent.channels = ch1
+   agent.channels.ch1.type = net.thisptr.flume.plugins.channel.synchronous.SynchronousChannel
+   ```
 
 
 How it works
@@ -38,13 +46,13 @@ This guarantees at-least once delivery because the source transaction succeeds o
 Choosing channel implementations
 -----------------
 
-If you don't need at-least once delivery, just use Memory Channel. If the source itself has a buffering capability, such as in case of Taildir Source, Kinesis Source, or Pub/Sub Source, you can try Synchronous Channel. Otherwise, use File Channel.
+If you don't need at-least once delivery, just use Memory Channel. If the source itself works like a reservoir, such as in case of Taildir Source, Kinesis Source, or Pub/Sub Source, you can try Synchronous Channel. Otherwise, use File Channel.
 
-|            | At-least Once Delivery | Events are buffered when sink is slow |
-|------------|------------|-----------|
-| File Channel | Yes | Yes |
-| Memory Channel | No (Loses events on crash) | Yes |
-| **Synchronous Channel** | Yes | No |
+|                         | At-least Once Delivery     | Acts as a reservoir                        | Performance          |
+|-------------------------|----------------------------|--------------------------------------------|----------------------|
+| File Channel            | Yes                        | Yes                                        | Low (Disks are slow) |
+| Memory Channel          | No (Loses events on crash) | Yes                                        | High                 |
+| **Synchronous Channel** | Yes                        | No (Source is blocked if the sink is slow) | High                 |
 
 Performance
 -----------
