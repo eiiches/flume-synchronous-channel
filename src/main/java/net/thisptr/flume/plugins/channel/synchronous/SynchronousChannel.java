@@ -22,6 +22,10 @@ public class SynchronousChannel extends BasicChannelSemantics implements Transac
 
     private ChannelCounter channelCounter;
 
+    private static final long DEFAULT_TAKE_TIMEOUT_MILLIS = 1 * 1000L;
+
+    private volatile long takeTimeoutMillis = DEFAULT_TAKE_TIMEOUT_MILLIS;
+
     private final LinkedList<SynchronousTransaction> txWithPendingEvents = new LinkedList<>();
 
     private static class PendingEvent {
@@ -61,7 +65,7 @@ public class SynchronousChannel extends BasicChannelSemantics implements Transac
         protected Event doTake() throws InterruptedException {
             channelCounter.incrementEventTakeAttemptCount();
 
-            long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(takeTimeoutMillis);
 
             boolean alreadyTookSome;
             synchronized (this) {
@@ -189,6 +193,7 @@ public class SynchronousChannel extends BasicChannelSemantics implements Transac
     public void configure(Context context) {
         if (channelCounter == null)
             channelCounter = new ChannelCounter(getName());
+        takeTimeoutMillis = context.getLong("takeTimeout", DEFAULT_TAKE_TIMEOUT_MILLIS);
     }
 
     @Override
