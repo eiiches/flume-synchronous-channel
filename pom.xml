@@ -4,7 +4,7 @@
 
     <groupId>net.thisptr.flume.plugins</groupId>
     <artifactId>flume-synchronous-channel</artifactId>
-    <version>0.0.1</version>
+    <version>0.0.2</version>
     <name>${project.groupId}:${project.artifactId}</name>
     <description>Flume Synchronous Channel</description>
     <url>https://github.com/eiiches/flume-synchronous-channel</url>
@@ -28,7 +28,7 @@
         <connection>scm:git:git@github.com:eiiches/flume-synchronous-channel.git</connection>
         <developerConnection>scm:git:git@github.com:eiiches/flume-synchronous-channel.git</developerConnection>
         <url>git@github.com:eiiches/flume-synchronous-channel.git</url>
-        <tag>0.0.1</tag>
+        <tag>0.0.2</tag>
     </scm>
 
     <distributionManagement>
@@ -48,24 +48,24 @@
         <dependency>
             <groupId>org.apache.flume</groupId>
             <artifactId>flume-ng-core</artifactId>
-            <version>1.10.1</version>
+            <version>1.11.0</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>5.9.0</version>
+            <version>5.9.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
-            <version>5.9.0</version>
+            <version>5.9.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.platform</groupId>
             <artifactId>junit-platform-runner</artifactId>
-            <version>1.9.0</version>
+            <version>1.9.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -115,7 +115,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.4.1</version>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
