@@ -20,7 +20,7 @@ It should be more performant because it doesn't use disks. It doesn't lose event
 Usage
 -----
 
-1. [Download a pre-built jar](https://repo1.maven.org/maven2/net/thisptr/flume/plugins/flume-synchronous-channel/0.0.1/flume-synchronous-channel-0.0.1.jar) and put it under `$FLUME_HOME/lib`.
+1. [Download a pre-built jar](https://repo1.maven.org/maven2/net/thisptr/flume/plugins/flume-synchronous-channel/0.0.2/flume-synchronous-channel-0.0.1.jar) and put it under `$FLUME_HOME/lib`.
 
    Alternatively, you can build a jar manually:
 
